@@ -11,6 +11,10 @@ function money(value) {
 function App() {
   const slug = decodeURIComponent(window.location.pathname.split('/').filter(Boolean)[0] || '').trim();
   const rootNode = slug ? getRootNode(slug) : '';
+  // The MountainView public URL is an alias; its Firebase data lives under Restoran.
+  const databaseRootNode = rootNode.toLocaleLowerCase('bs') === 'mountainview'
+    ? 'Restoran'
+    : rootNode;
   const [items, setItems] = useState([]);
   const [category, setCategory] = useState('Sve');
   const [menuType, setMenuType] = useState('food');
@@ -19,14 +23,14 @@ function App() {
   const menuNode = menuType === 'drinks' ? 'Podaci1' : 'Podaci';
 
   useEffect(() => {
-    if (!rootNode) return undefined;
+    if (!databaseRootNode) return undefined;
     const controller = new AbortController();
 
     async function loadMenu() {
       setLoading(true);
       setError('');
       try {
-        const path = [rootNode, 'Menu', menuNode].map(encodeURIComponent).join('/');
+        const path = [databaseRootNode, 'Menu', menuNode].map(encodeURIComponent).join('/');
         const response = await fetch(`${ANDROID_DATABASE_URL}/${path}.json`, {
           headers: { Accept: 'application/json' },
           signal: controller.signal,
@@ -69,7 +73,7 @@ function App() {
 
     loadMenu();
     return () => controller.abort();
-  }, [rootNode, menuNode]);
+  }, [databaseRootNode, menuNode]);
 
   const categories = useMemo(
     () => ['Sve', ...new Set(items.map((item) => item.category?.trim() || 'Ostalo'))],
