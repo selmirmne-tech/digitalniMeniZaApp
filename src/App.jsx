@@ -89,12 +89,7 @@ function App() {
 
   function selectCategory(name) {
     setCategory(name);
-    window.requestAnimationFrame(() => {
-      document.querySelector('.menu-groups')?.scrollIntoView({
-        behavior: 'smooth',
-        block: 'start',
-      });
-    });
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
   if (!slug) {
