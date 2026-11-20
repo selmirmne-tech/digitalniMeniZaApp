@@ -1,0 +1,19 @@
+{
+  "name": "digitalmeni",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --configLoader native",
+    "build": "vite build --configLoader native",
+    "preview": "vite preview --configLoader native"
+  },
+  "dependencies": {
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.0.4",
+    "vite": "^8.2.0"
+  }
+}
