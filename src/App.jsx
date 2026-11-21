@@ -25,20 +25,49 @@ function App() {
   useEffect(() => {
     if (!databaseRootNode) return undefined;
     const controller = new AbortController();
+    const cacheKey = `digital-menu:${databaseRootNode}:${menuNode}`;
+    const menuPath = [databaseRootNode, 'Menu', menuNode].map(encodeURIComponent).join('/');
+    const versionPath = [databaseRootNode, 'Menu', 'createAtMillis'].map(encodeURIComponent).join('/');
+    let eventStream;
+    let currentVersion = '';
+    let cachedMenu = null;
+    let latestRequest = 0;
 
-    async function loadMenu() {
+    try {
+      const raw = localStorage.getItem(cacheKey);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed?.items)) cachedMenu = parsed;
+      }
+    } catch {
+      cachedMenu = null;
+    }
+
+    if (cachedMenu) {
+      setItems(cachedMenu.items);
+      setCategory('Sve');
+      setLoading(false);
+      setError('');
+    } else {
+      setItems([]);
       setLoading(true);
       setError('');
+    }
+
+    async function loadMenu(version) {
+      const requestId = ++latestRequest;
       try {
-        const path = [databaseRootNode, 'Menu', menuNode].map(encodeURIComponent).join('/');
-        const response = await fetch(`${ANDROID_DATABASE_URL}/${path}.json`, {
+        const response = await fetch(`${ANDROID_DATABASE_URL}/${menuPath}.json`, {
           headers: { Accept: 'application/json' },
           signal: controller.signal,
         });
         if (response.status === 401 || response.status === 403) {
           if (menuNode === 'Podaci1') {
-            setItems([]);
-            setCategory('Sve');
+            if (!cachedMenu && !controller.signal.aborted) {
+              setItems([]);
+              setCategory('Sve');
+              setLoading(false);
+            }
             return;
           }
           throw new Error(`Firebase trenutno ne dozvoljava javno čitanje ovog menija. Provjerite pravila za Menu/${menuNode}.`);
@@ -46,8 +75,16 @@ function App() {
         if (!response.ok) throw new Error(`Greška pri učitavanju menija (HTTP ${response.status}).`);
         const data = await response.json();
         if (data == null) {
-          setItems([]);
+          if (controller.signal.aborted || requestId !== latestRequest) return;
+          const emptyMenu = [];
+          setItems(emptyMenu);
           setCategory('Sve');
+          setLoading(false);
+          setError('');
+          try {
+            localStorage.setItem(cacheKey, JSON.stringify({ version: String(version || ''), items: emptyMenu }));
+          } catch { /* The menu still works if browser storage is unavailable. */ }
+          cachedMenu = { version: String(version || ''), items: emptyMenu };
           return;
         }
         if (typeof data !== 'object') throw new Error('Meni za ovaj restoran nije pronađen.');
@@ -62,17 +99,69 @@ function App() {
               ? aNumber - bNumber
               : a.id.localeCompare(b.id);
           });
+        if (controller.signal.aborted || requestId !== latestRequest) return;
         setItems(menuItems);
         setCategory('Sve');
+        setError('');
+        try {
+          localStorage.setItem(cacheKey, JSON.stringify({ version: String(version || ''), items: menuItems }));
+        } catch { /* The menu still works if browser storage is unavailable. */ }
+        cachedMenu = { version: String(version || ''), items: menuItems };
       } catch (loadError) {
-        if (loadError.name !== 'AbortError') setError(loadError.message || 'Ne mogu učitati meni.');
+        if (loadError.name !== 'AbortError' && !cachedMenu) setError(loadError.message || 'Ne mogu učitati meni.');
       } finally {
-        if (!controller.signal.aborted) setLoading(false);
+        if (!controller.signal.aborted && requestId === latestRequest) setLoading(false);
       }
     }
 
-    loadMenu();
-    return () => controller.abort();
+    async function checkVersionAndRefresh(version) {
+      const nextVersion = version == null ? '' : String(version);
+      if (nextVersion === currentVersion && (cachedMenu || latestRequest > 0)) return;
+      currentVersion = nextVersion;
+      if (cachedMenu && String(cachedMenu.version || '') === nextVersion) return;
+      if (!cachedMenu) setLoading(true);
+      await loadMenu(nextVersion);
+    }
+
+    async function startVersionWatch() {
+      try {
+        const versionResponse = await fetch(`${ANDROID_DATABASE_URL}/${versionPath}.json`, {
+          headers: { Accept: 'application/json' },
+          signal: controller.signal,
+        });
+        if (!versionResponse.ok) throw new Error('Verzija menija nije javno dostupna.');
+        const version = await versionResponse.json();
+        if (controller.signal.aborted) return;
+        await checkVersionAndRefresh(version);
+
+        // Firebase streams only the small version field. Menu items are fetched
+        // again only when that value changes.
+        if (typeof EventSource !== 'undefined') {
+          eventStream = new EventSource(`${ANDROID_DATABASE_URL}/${versionPath}.json`);
+          const onVersionEvent = (event) => {
+            try {
+              const payload = JSON.parse(event.data);
+              const value = payload && typeof payload === 'object' && 'data' in payload
+                ? payload.data
+                : payload;
+              checkVersionAndRefresh(value);
+            } catch { /* Ignore malformed stream keep-alives or payloads. */ }
+          };
+          eventStream.addEventListener('put', onVersionEvent);
+          eventStream.addEventListener('patch', onVersionEvent);
+        }
+      } catch (versionError) {
+        if (controller.signal.aborted) return;
+        // Existing cached items remain usable when timestamp access is restricted.
+        if (!cachedMenu) await loadMenu('');
+      }
+    }
+
+    startVersionWatch();
+    return () => {
+      controller.abort();
+      if (eventStream) eventStream.close();
+    };
   }, [databaseRootNode, menuNode]);
 
   const categories = useMemo(
